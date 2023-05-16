@@ -1,0 +1,775 @@
+
+Todas estas indicaciones tenemos que hacerlas en server.c y client.c. Están hechos en C con Netbeans 8.2. Actualmente, se ha estado
+intentando implementar esas funciones. De las funciones implementadas y a implementar, quiero que se le añada
+en un comentario que es "Añadida".
+Los códigos están separados en dos, la parte del cliente y la del servidor. La del servidor se llama ms_server
+y se compone de  las siguientes cabeceras y código:
+
+Cabeceras:
+
+cache.h:
+
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/*
+ * File:   cache.h
+ * Author: juan-
+ *
+ * Created on 15 de mayo de 2023, 0:32
+ */
+
+#ifndef CACHE_H
+#define CACHE_H
+
+#include <stdbool.h>
+#include "myrecord.h"
+
+#define MAX_CACHE_SIZE 100
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
+typedef struct {
+    bool valid; // Indica si la entrada de la caché es válida
+    MYRECORD_RECORD_t record; // es el registro en sí
+    int index;
+} cache_entry_t;
+
+extern cache_entry_t cache_entries[MAX_CACHE_SIZE];
+
+
+// Declaración de funciones para trabajar con la caché
+void cache_init();
+int cache_read(MYRECORD_RECORD_t* record, int index);
+int cache_write(MYRECORD_RECORD_t* record, int index);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* CACHE_H */
+
+messages.h:
+
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/*
+ * File:   messaged.h
+ * Author: juan-
+ *
+ * Created on 9 de mayo de 2023, 9:36
+ */
+
+#ifndef MESSAGES_H
+#define MESSAGES_H
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include "myrecord.h"
+
+  /**
+   * We can define an enum instead of an integer to give unique numbers to
+   * protocol operations.
+   */
+  typedef enum
+  {
+    MYSTORE_CLI_OP_READ = 0,
+    MYSTORE_CLI_OP_WRITE,
+    MYSTORE_CLI_OP_FLUSH
+    /* Any other operation will have its own number here. */
+  } MYSTORE_CLI_OP;
+
+  typedef enum
+  {
+      MYSTORE_SRV_OP_OK = 0,
+      MYSTORE_SRV_OP_ERROR
+  } MYSTORE_SRV_OP;
+
+
+  /**
+   * Message for a request from the client.
+   */
+  typedef struct
+  {
+    long mtype; /* This type distinguishes messages to server from messages to clients. */
+    MYSTORE_CLI_OP requested_op; /* This is the selected operation to perform. */
+    long return_to; /* The client sends a type to address the reply to because we may have several clients. */
+    MYRECORD_RECORD_t data; /* This field contains a record only when writing. */
+    int index; /* Record index to read or write */
+
+    /* Did you forget some other field? Add it to the message. */
+  } request_message_t;
+
+  /**
+   * Message for an answer from the server.
+   */
+  typedef struct
+  {
+    long mtype; /* This type distinguishes messages to server from messages to clients. */
+    int status; /* This status passes back the result of each operation. */
+    MYRECORD_RECORD_t data; /* This field contains a record only when reading. */
+    char message[100];
+    /* Did you forget some other field? Add it to the message. */
+  } answer_message_t;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MESSAGES_H */
+
+
+
+PARTE 5:
+
+
+mybucket.h:
+
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/*
+ * File:   mybucket.h
+ * Author: juan-
+ *
+ * Created on 9 de mayo de 2023, 9:37
+ */
+
+#ifndef MYBUCKET_H
+#define MYBUCKET_H
+
+#include <string.h>
+#include "myrecord.h"
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+  /* This is the number of records in this bucket */
+#define MYBUCKET_NRECORDS 64
+
+  /* BUCKET: This structure contains one single record and additional control fields. */
+  typedef struct
+  {
+
+    /* Position of this bucket in file (in buckets) */
+    unsigned int id;
+
+    /* State of each record inside this bucket. -1: exists, 0: empty */
+    int exists[MYBUCKET_NRECORDS];
+
+    /* This is the space needed to store N records inside this bucket. */
+    MYRECORD_RECORD_t record[MYBUCKET_NRECORDS];
+
+  } MYBUCKET_BUCKET_t;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MYBUCKET_H */
+
+
+mycache.h:
+
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/*
+ * File:   mycache.h
+ * Author: juan-
+ *
+ * Created on 9 de mayo de 2023, 9:38
+ */
+
+#ifndef MYCACHE_H
+#define MYCACHE_H
+
+#include <stdint.h>
+#include <sys/types.h>
+
+#include "mybucket.h"
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+  /* This is the size of our cache in buckets.  */
+#define MYC_NUMENTRIES 64
+
+  /* This is the default name of the DB file. */
+#define MYC_FILENAME "myDBtable.dat"
+
+  /* This function initializes the cache. */
+  int MYC_initCache ();
+  /* This function closes the cache. It flushes all the information inside the
+     cache that is not written to the file yet. */
+  int MYC_closeCache ();
+
+  /* This function reads a record from the file (at given index)
+   * inside the record passed as argument. */
+  int MYC_readEntry (int fileIndex, MYRECORD_RECORD_t *record);
+
+  /* This function writes a record into the cache from the record passed as argument.
+   * The record will be written at the given index of the file later.
+   * This funtions does not write the cache entry to the file inmediately. */
+  int MYC_writeEntry (int fileIndex, MYRECORD_RECORD_t *record);
+  /* This function flushes one cache entry containing one record to be written
+   * at the given index. */
+  int MYC_flushEntry (int fileIndex);
+  /* This function flushes all the entries of the cache to the file. */
+  int MYC_flushAll ();
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MYCACHE_H */
+
+
+PARTE 6:
+
+
+myrecord.h:
+
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/*
+ * File:   myrecord.h
+ * Author: juan-
+ *
+ * Created on 9 de mayo de 2023, 9:38
+ */
+
+#ifndef MYRECORD_H
+#define MYRECORD_H
+
+#include <stdlib.h>
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+#define MYRECORD_NAMELENGTH 16
+
+  /* This is the definition of one record in my database.
+   * SQL equivalent could be:
+   * CREATE TABLE (
+   *    registerid  INTEGER,
+   *    age         INTEGER,
+   *    gender      INTEGER,
+   *    name        CHAR(15)
+   *  );
+   */
+  typedef struct
+  {
+    /* This is the ID field of the record. */
+    unsigned int registerid;
+    /* Age */
+    int age;
+    /* Gender is an integer with fixed values for genders.*/
+    int gender;
+    /* Name is a fixed length string. It can only store 15 chars plus a terminating zero char. */
+    char name[MYRECORD_NAMELENGTH];
+  } MYRECORD_RECORD_t;
+
+  /* We define some useful macros to help writing code. */
+
+  /* This MACRO allocates space for a record. */
+#define myb_newrecord() ((MYRECORD_RECORD_t *)calloc(1,sizeof(MYRECORD_RECORD_t)))
+  /* You don't need a special function to free but this macro is nicer. */
+#define myb_freerecord(r) free(r)
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MYRECORD_H */
+
+mystore_srv.h:
+
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/*
+ * File:   mystore_srv.h
+ * Author: juan-
+ *
+ * Created on 9 de mayo de 2023, 9:39
+ */
+
+#ifndef MYSTORE_CLI_H
+#define MYSTORE_CLI_H
+
+#include <stdint.h>
+#include <sys/types.h>
+#include "myrecord.h"
+#include "messages.h"
+#include <errno.h>
+
+#define MSG_TYPE_REQUEST 1
+
+extern int message_queue;
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+#define MESSAGE_QUEUE_KEY 1234 // Un valor arbitrario
+  /* This function initializes the server side of the API. */
+int STORS_init () {
+    // Crea o abre una cola de mensajes
+    message_queue = msgget(MESSAGE_QUEUE_KEY, IPC_CREAT | 0666);
+    if (message_queue == -1) {
+        perror("Error al crear/abrir la cola de mensajes");
+        return -1;
+    }
+    return 0;
+}
+  /* This function closes the server side of the API. */
+int STORS_close () {
+    // Elimina la cola de mensajes
+    if (msgctl(message_queue, IPC_RMID, NULL) == -1) {
+        perror("Error al eliminar la cola de mensajes");
+        return -1;
+    }
+    return 0;
+}
+  /* This function sends back an answer to the message queue. */
+int STORS_readrequest (request_message_t *request) {
+    // Lee un mensaje de tipo MSG_TYPE_REQUEST de la cola de mensajes
+    while (1) {
+        ssize_t result = msgrcv(message_queue, request, sizeof(request_message_t) - sizeof(long), MSG_TYPE_REQUEST, 0);
+        if (result == -1) {
+            if (errno == EINTR) {
+                continue;  // Si la llamada a la función fue interrumpida por una señal, vuelve a intentarlo.
+            } else {
+                perror("Error al leer la solicitud de la cola de mensajes");
+                return -1;
+            }
+        }
+        break;  // Si la llamada a la función fue exitosa, sal del ciclo.
+    }
+    return 0;
+}
+
+  /* This function reads a request from the message queue. */
+int STORS_sendanswer (answer_message_t *answer) {
+    // Envía un mensaje a la cola de mensajes
+    while (1) {
+        ssize_t result = msgsnd(message_queue, answer, sizeof(answer_message_t) - sizeof(long), 0);
+        if (result == -1) {
+            if (errno == EINTR) {
+                continue;  // Si la llamada a la función fue interrumpida por una señal, vuelve a intentarlo.
+            } else {
+                perror("Error al enviar la respuesta a través de la cola de mensajes");
+                return -1;
+            }
+        }
+        break;  // Si la llamada a la función fue exitosa, sal del ciclo.
+    }
+    return 0;
+}
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MYSTORE_CLI_H */
+
+
+
+PARTE 7:
+
+También se compone de estos códigos en C que usan esas cabeceras:
+
+cache.c:
+
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+#include <stdbool.h>
+#include "myrecord.h"
+#include "cache.h"
+
+// Definición de las entradas de la caché
+cache_entry_t cache_entries[MAX_CACHE_SIZE];
+
+
+//Inicializar la cache
+void cache_init(){
+    int i;
+    for (i = 0; i < MAX_CACHE_SIZE; i++){
+        cache_entries[i].valid = false;
+    }
+}
+// Implementación de las funciones de caché
+int cache_read(MYRECORD_RECORD_t *record, int index) {
+    if (index < 0 || index >= MAX_CACHE_SIZE) {
+        return -1;
+    }
+
+    if (cache_entries[index].valid) {
+        *record = cache_entries[index].record;
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
+int cache_write(MYRECORD_RECORD_t *record, int index) {
+    if (index < 0 || index >= MAX_CACHE_SIZE) {
+        return -1;
+    }
+
+    cache_entries[index].record = *record;
+    cache_entries[index].valid = true;
+    return 0;
+}
+
+
+server.c:
+
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/*
+ * File:   server.c
+ * Author: juan-
+ *
+ * Created on 9 de mayo de 2023, 9:35
+ *
+ * Características implementadas hasta ahora 9 de mayo 2023 10:26:
+ * -Interceptación de señales de terminación para una terminación ordenada, que incluye el vaciado del caché en el disco.
+ * -Temporizador para vaciar el caché periódicamente.
+ * -Capacidad para hacer fork() y desvincularse de la línea de comandos, permitiendo que el daemon continúe en segundo plano como un servicio real.
+ * -Estas son las características que faltan por implementar:
+
+ * Quedan:
+ * Agregar señales personalizadas para realizar acciones útiles dentro del daemon, como imprimir estadísticas en la consola.
+ * Redirigir los mensajes a un archivo de registro para que puedas cerrar la terminal sin perder los mensajes generados durante su vida.
+ * Agregar argumentos de línea de comandos para controlar el comportamiento al iniciarse.
+ * El código actual proporcionado incluye las mejoras solicitadas en la gestión de señales, el manejo del caché y la ejecución en segundo plano.
+ *
+ * Errores pendientes a corregir de la versión 1.2:
+ * Al pasar al nuevo proyecto, problemas con las librerías. (Por ahora)
+ *
+
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <signal.h>
+#include <sys/time.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include "mystore_srv.h"
+#include "messages.h"
+#include "myrecord.h"
+#include <errno.h>
+#include "cache.h"
+//#include "cache.c"
+
+#define DEBUG_LEVEL 0
+
+// Estructura de caché básica
+/*
+typedef struct {
+  int is_modified; // indica si el contenido de la caché ha sido modificado
+  off_t offset; // desplazamiento en el archivo donde se encuentra el contenido de la caché
+  size_t size; // tamaño del contenido de la caché
+  char data[256]; // contenido de la caché (ajustar el tamaño según sea necesario)
+} cache_entry_t;
+*/
+// Declaración de funciones para trabajar con la caché
+void server_cache_init(cache_entry_t *cache, int cache_size);
+void cache_flush(cache_entry_t *cache, int cache_size);
+int write_to_disk(const void *data, size_t size, off_t offset);
+
+// Variables globales
+int message_queue = -1; // identificador de la cola de mensajes
+static cache_entry_t cache[10]; // caché de tamaño 10 (ajustar el tamaño según sea necesario)
+static int cache_size = sizeof(cache) / sizeof(cache_entry_t); // tamaño de la caché
+
+// Funciones para el manejo de señales
+static void handle_termination_signal(int sig);
+static void handle_cache_flush(int sig);
+static void setup_signals();
+static void setup_cache_flush_timer(int interval_seconds);
+
+// Implementación de funciones para trabajar con la caché
+void server_cache_init(cache_entry_t *cache, int cache_size) {
+  // Inicializar la caché
+    int i;
+   /* for (i = 0; i < cache_size; i++) {
+    cache[i].is_modified = 0;
+    cache[i].offset = 0;
+    cache[i].size = 0;
+  }*/
+    for (i = 0; i < cache_size; i++){
+        cache[i].valid = false;
+    }
+}
+
+int write_to_disk(const void *data, size_t size, off_t offset) {
+  int fd;
+  ssize_t bytes_written;
+
+  fd = open("your_output_file.bin", O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR); // abrir el archivo para escritura
+  if (fd == -1) {
+    perror("Error opening file"); // error al abrir el archivo
+    return errno;
+  }
+
+  if (lseek(fd, offset, SEEK_SET) == -1) {
+    perror("Error seeking to file offset"); // error al buscar la posición en el archivo
+    close(fd);
+    return errno;
+  }
+
+  bytes_written = write(fd,(const char *)data, size); // escribir los datos en el archivo
+  if (bytes_written == -1) {
+    perror("Error writing to file"); // error al escribir en el archivo
+    close(fd);
+    return errno;
+  }
+
+  close(fd); // cerrar el archivo
+  return 0;
+}
+
+void cache_flush(cache_entry_t *cache, int cache_size) {
+// Vacía la caché escribiendo los datos en el archivo si han sido modificados
+    int i;
+    for (i = 0; i < cache_size; i++) {/*
+        if (cache[i].is_modified) {
+        // No estoy seguro si esta función se utiliza para escribir datos en el disco
+        write_to_disk(cache[i].data, cache[i].size, cache[i].offset);
+        cache[i].is_modified = 0; */
+        if (cache[i].valid){
+            write_to_disk(&cache[i].record, sizeof(MYRECORD_RECORD_t), cache[i].index * sizeof(MYRECORD_RECORD_t));
+            cache[i].valid = false;
+        }
+    }
+}
+
+int main(int argc, char *argv[]) {
+ int daemon_flag = 0;
+ int option;
+ pid_t pid, sid;
+ printf("El servidor está operativo.\n");
+
+    while ((option = getopt(argc, argv, "d")) != -1) {
+     switch (option) {
+     case 'd':
+     daemon_flag = 1;
+     break;
+     default:
+     fprintf(stderr, "Usage: %s [-d]\n", argv[0]);
+     exit(EXIT_FAILURE);
+     }
+    }
+
+ if (daemon_flag) {
+ // Si se especifica la flag '-d', crear un proceso hijo y terminar el proceso padre
+ pid = fork();
+    if (pid < 0) {
+    perror("Fork failed");
+    exit(EXIT_FAILURE);
+    }
+
+    if (pid > 0) {
+    exit(EXIT_SUCCESS);
+    }
+
+    // Crea una nueva sesión para el proceso hijo
+    sid = setsid();
+    if (sid < 0) {
+    perror("setsid failed");
+    exit(EXIT_FAILURE);
+    }
+
+    // Cambia el directorio de trabajo al directorio raíz
+    if ((chdir("/")) < 0) {
+    perror("chdir failed");
+    exit(EXIT_FAILURE);
+    }
+
+    // Cierra los descriptores de archivo estándar
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+    }
+
+    // Inicializa la cola de mensajes
+    if (STORS_init() != 0) {
+    perror("STORS_init failed");
+    exit(EXIT_FAILURE);
+    }
+
+    // Inicializa la caché
+    //server_cache_init(cache, cache_size);
+    server_cache_init(cache_entries, MAX_CACHE_SIZE);
+
+    // Configura el manejo de señales y el temporizador para el vaciado periódico de la caché
+    setup_signals();
+    setup_cache_flush_timer(30); // vaciar la caché cada 30 segundos
+
+        while (1) {
+         request_message_t request;
+         answer_message_t answer;
+         // Lee la solicitud de la cola de mensajes
+            if (STORS_readrequest(&request) != 0) {
+              perror("STORS_readrequest failed");
+              continue;
+}
+
+// Procesar la solicitud y generar la respuesta
+// Hay que implementar aquí el procesamiento de las solicitudes
+    // Procesar la solicitud y generar la respuesta
+switch (request.requested_op) {
+    case MYSTORE_CLI_OP_READ:
+        // Código para manejar las solicitudes de lectura
+        if (request.index < 0 || request.index >= cache_size) {
+            // Si el índice está fuera de rango, envía un error
+            answer.status = MYSTORE_SRV_OP_ERROR;
+            strcpy(answer.message, "Error: Index out of range.");
+        } else {
+            // Leer el registro de la caché
+            //MYRECORD_RECORD_t *record = cache_read(&cache_entries[request.index]);
+            MYRECORD_RECORD_t *record = malloc(sizeof(MYRECORD_RECORD_t));
+            // Copiar el registro leído a la respuesta
+            answer.data = *record;
+            //answer.size = sizeof(MYRECORD_RECORD_t);
+            answer.status = MYSTORE_SRV_OP_OK;
+        }
+        break;
+
+    case MYSTORE_CLI_OP_WRITE:
+        // Código para manejar las solicitudes de escritura
+        if (request.index < 0 || request.index >= cache_size) {
+            // Si el índice está fuera de rango, envía un error
+            answer.status = MYSTORE_SRV_OP_ERROR;
+            strcpy(answer.message, "Error: Index out of range.");
+        } else {
+            // Escribe el registro en la caché
+            //cache_write(cache, request.index, request.data);
+            cache_write(&(cache_entries[request.index].record), request.index);
+            answer.status = MYSTORE_SRV_OP_OK;
+        }
+        break;
+
+    case MYSTORE_CLI_OP_FLUSH:
+        // Código para manejar las solicitudes de flush
+        cache_flush(cache, cache_size);
+        answer.status = MYSTORE_SRV_OP_OK;
+        break;
+
+    default:
+        // Código para manejar solicitudes no reconocidas
+        answer.status = MYSTORE_SRV_OP_ERROR;
+        strcpy(answer.message, "Error: Unrecognized operation.");
+        break;
+}
+    // Enviar la respuesta a través de la cola de mensajes
+if (STORS_sendanswer(&answer) != 0) {
+  perror("STORS_sendanswer failed");
+  continue;
+}
+}
+
+return 0;
+}
+
+static void handle_termination_signal(int sig) {
+ // Vaciar la caché antes de salir
+ //cache_flush(cache, cache_size);
+    cache_flush(cache_entries, MAX_CACHE_SIZE);
+ // Cerrar la cola de mensajes y salir del programa
+ STORS_close();
+ exit(EXIT_SUCCESS);
+}
+
+static void handle_cache_flush(int sig) {
+    if (sig == SIGALRM) {
+    // Vaciar la caché y volver a configurar el temporizador para el próximo vaciado periódico
+    //cache_flush(cache, cache_size);
+        cache_flush(cache_entries, MAX_CACHE_SIZE);
+    setup_cache_flush_timer(30);
+    }
+}
+
+static void setup_signals() {
+ struct sigaction sa;
+
+ // Configurar el manejo de señales de terminación
+ sigemptyset(&sa.sa_mask);
+ sa.sa_flags = 0;
+ sa.sa_handler = handle_termination_signal;
+ sigaction(SIGINT, &sa, NULL);
+ sigaction(SIGTERM, &sa, NULL);
+
+ // Configurar el manejo de la señal del temporizador para el vaciado periódico de la caché
+ sigemptyset(&sa.sa_mask);
+ sa.sa_flags = 0;
+ sa.sa_handler = handle_cache_flush;
+ sigaction(SIGALRM, &sa, NULL);
+}
+
+static void setup_cache_flush_timer(int interval_seconds) {
+ struct itimerval timer;
+
+ // Configurar el temporizador para que envíe una señal SIGALRM cada interval_seconds segundos
+ timer.it_interval.tv_sec = interval_seconds;
+ timer.it_interval.tv_usec = 0;
+ timer.it_value.tv_sec = interval_seconds;
+ timer.it_value.tv_usec = 0;
+
+ setitimer(ITIMER_REAL, &timer, NULL);
+}
