@@ -1,0 +1,316 @@
+1. About this lab
+In this lab you will improve your store engine test program so that it will become a real UNIX
+daemon.
+We will improve it by:
+ Intercepting termination signals to implement a graceful termination which includes:
+o Flushing our record cache to disk.
+o Completing current I/O operation before exiting.
+o Sending back the result of current operation to its client.
+o Removing the message queue.
+ Adding a timer to periodically flush the cache.
+ Adding command line arguments to control its behavior when starting.
+ Adding some custom signals to engage some useful action inside our daemon like
+printing statistics to the console.
+ Being able to fork() and detach from the command shell so that our daemon can
+continue in background to become a real service.
+ Redirecting messages to a log file so that we can close the terminal without losing the
+messages generated during its life.
+The first part of the lab is about learning how to use signal handlers, and how to operate with
+signals. You'll also learn how to use fork() and how to redirect standard file descriptors to a new
+destination with dup() so that you don't need to rewrite you code completely.
+The second part asks you to modify your test program to improve its implementation.
+To do this lab you have to use five projects that you can find in an archive at the web page (OSL3-DBMS-Step3). They are exactly the same projects that you had to complete in previous
+laboratory, but they are working implementations of the requirements of such laboratory.
+In this lab, you will modify the code of all projects to fulfill the requirements described in this
+document.
+After completing this lab, you have to upload the whole directory containing the 5 projects it to
+the virtual campus following the instructions on the next section.
+
+2. Uploading your work
+While developing, all five projects need to be kept together side by side in the original directory.
+Don’t move any of them apart, because the every project is configured to use other while
+compiling, either as includes or as libraries during the link phase.
+To pack the files:
+ Be sure that you can compile and run your project before packing it.
+ Compress the parent directory OS-L3-DBMS-Step3 containing all the projects.
+ Upload the resulting zip file to the virtual campus.
+DO NOT USE ANY OTHER FORMAT THAN ZIP FOR PACKING YOUR WORK.
+3. Graceful termination (compulsory)
+The first improvement will be what we call graceful termination. You have to intercept the two
+standard termination signals to make your program terminate in a controlled way. You may
+study the examples about delaying signals processing to see a suggested strategy to do all the
+cleaning in the simplest way.
+The tasks you have to take care during the exiting stage of your program are:
+ Completing current I/O operation before exiting (if any).
+ Sending back the result of current operation to its client (if any).
+ Flushing the contents of the record cache to disk.
+ Removing the message queue.
+One important aspect to consider during cleaning is that termination signals can arrive at any
+instant after program start. They can arrive even immediately after starting. So, the termination
+code should not assume that everything is initialized before cleaning. That means that
+termination could be requested before creating the message queue, before opening the cache,
+or during the initialization of the cache.
+A good strategy to keep cleaning code very simple is to let the daemon complete initialization
+of both the cache and the message queue always (even if termination has been requested at the
+start of the program). Once initialization phase ends, you can check if termination was requested
+before entering the main loop of the server.
+Pay attention to all the system calls in the server in which it could be blocked even for a few
+milliseconds. Any blocking call may be aborted by a signal. Thinking of msgrcv() as the most
+probable system call to be interrupted by a signal may lead you to forget that the server is also
+blocking for some milliseconds in read() and write() inside the cache library. There is a small but
+not null likelihood that the server gets interrupted in the middle of the read() or write() syscalls.
+If you really want to make a bullet-proof program, you should rewrite the code of your cache
+library to retry read() or write() if they return an EINTR error. Of course, you should not retry
+on any other case except that. Also, msgrcv() should not retry if termination has been
+requested, but if a timer signal has arrived, you want to retry getting a request.
+
+4. Adding a timer to periodically flush the cache (compulsory)
+In this step, you should program a periodic event that allows the server to flush the cache every
+15 seconds using MYC_flushAll().
+In the examples related with signal processing, you can also find how can you use the system
+call alarm() and the handler for the SIGALRM signal to program a periodic action in your
+program. In the last example, you can see how to delay processing of this periodic event to the
+main loop of your program, avoiding the problems of introducing unsafe code in the signal
+handler itself.
+Also, be careful with blocking system calls as described in the previous section. SIGALRM can
+abort any blocking syscall like msgrcv(), read() or write(), and the kernel will return EINTR any in
+that case. You want to distinguish EINTR from any other error returned by any syscall in your
+program, because this error means only that the kernel decided to abort the call to return the
+control to your program and give it an opportunity to process. In each point of your program,
+you have to decide if it is better to retry the syscall or to do another thing and retry later.
+
+5. Detach from command line (compulsory)
+A service daemon is a program intended to be executed automatically at the ending stages of
+system boot. So, when your program is well developed and you want to execute it for
+production, it is better that it does not make its parent (usually a shell) to wait forever. When a
+shell launches a child process, it waits until the child calls exit(). So, the strategy for detaching
+from the parent process (shell) is to fork() inside our program to execute the same code in a
+child process, and call exit() to make its parent know that it can continue as its child has ended.
+The next diagram shows the sequence of events:
+1. The shell starts our program calling fork() to create a new process and then calling exec()
+to load the server executable as memory image.
+2. The shell calls wait() to block until our program has ended. The shell does not know that
+our program is a service which will run forever.
+3. Our server program calls fork() soon after starting to create a new process which will
+execute the same code, but in another process.
+4. Our server calls immediately exit(n) to indicate the shell that the program has ended.
+5. The shell can continue reading the next command from the terminal or from a script file.
+6. The child process created by our program continues executing the server code (infinite
+loop serving requests). However, the parent of this process has ended and now, its
+parent is the init process (PID=1) which is the usual parent of a running daemon.
+
+Shell:
+fork() if (ischild?) exec(); else wait(child);
+-> fork()+exec()->              <- exit(0) <-
+Server fork() if (ischild?) {server code here} else exit(n);
+-> fork() -> Detached Server fork() if (ischild?) {server code here} else exit(n);
+
+Additional details on detaching from a shell
+Initialization
+As service initialization can fail with some error (for example another instance of service is
+already running), we would like to inform the shell about initialization failures with an exit code
+different from zero. Thus, we should perform initialization before forking the child to be able to
+call exit with such an error code. If we carry out initialization in the detached server, it is no
+longer a child of the shell and it can’t inform it about the error.
+So, the main function in the server should look like this pseudocode:
+main()
+{
+ initialize daemon libraries.
+ if (some error) exit(1); // Or assign other numbers for other errors
+ pid=fork();
+ if (ischild){ processing loop comes here }
+ else exit(0);
+}
+
+Also, an interesting question should raise here: Can I initialize a resource (open a file or a
+message queue) in one process and use it in its child process? The answer is: It depends on the
+resource. UNIX defines the concept of resource inheritance. Most resources which are available
+in a process when it calls fork() are inherited in its children and can be used there without
+initializing again, but not all of them. It depends on the type of resource.
+ For example, the following resources are inherited through fork(): running threads and
+semaphores, process priority, RAM contents (code, global variables, heap and stack),
+programmed signal handlers, open file descriptors, network sockets, references to IPC
+objects like message queues.
+ And these resources are amongst those not inherited through fork(): unexpired timer
+counts, pending signals, file locks, accumulated process statistics.
+From those lists it can be seen that in our server, most initialization code can be executed safely
+before forking the child, except starting a timer with alarm().
+
+Detaching from terminals
+If your program has been launched from a terminal, it is bound to that terminal through a
+concept called controlling terminal. We are not going to explain it in full detail here (you can
+read https://pubs.opengroup.org/onlinepubs/000095399/basedefs/xbd_chap11.html to know
+more about it). However, we must know that the kernel maintains some actions on processes
+bound to a given terminal:
+ If the terminal is closed (for example you close a console window or close a SSH session),
+the SIGHUP is sent to all processes bound to such terminal, and the default behavior is
+to kill your program.
+ If your program reads from or writes to such terminal, it will be sent a SIGTTIN or
+SIGTTOU signal whose default behavior is to stop your program (the same as CTRL-Z
+does).
+Obviously, you don’t want your server program to be killed when the terminal closes, nor be
+stopped when printing a debugging message. Because of that, you must detach your server
+from the controlling terminal. To do it, we need two actions to be performed:
+ Program SIGHUP to be ignored if received: We want to do this as soon as possible after
+starting. Also, this action can be done before calling fork() as it is inherited by the
+detached server. To do that, just program SIGHUP to SIG_IGN as follows:
+signal(SIGHUP, SIG_IGN);
+ To detach a process from the controlling terminal, you must call the setsid() function in
+the child process after calling fork(). This function creates a new session (a group of
+processes being controlled having a controlling terminal) but initially it has no
+controlling terminal. So, the new process will not be bound to the current terminal and
+it can continue running without any relation to it.
+So, our code will look like this one:
+
+main()
+{
+ signal(SIGHUP, SIG_IGN); // We will ignore SIGHUP as soon as possible
+ initialize daemon libraries.
+ if (some error) exit(1); // Or assign other numbers for other errors
+ pid=fork();
+ if (ischild)
+ { setsid(); processing loop comes here }
+ else exit(0);
+}
+
+6. Adding some custom signals (optional for score>7)
+POSIX has unassigned signals which can be used by the programmer to implement custom
+events. These are SIGUSR1 and SIGUSR2.
+Our proposal in this sense is to use both signals to change the behavior of the program, without
+having to recompile or restart it. So, you should:
+1. Program the server to print some usage statistics to stderr after receiving SIGUSR1. Our
+statistics will be three counters:
+o The total number of requests received by the server.
+o The total number of read requests processed by the server.
+o The total number of write requests processed by the server.
+The format can be anything like “processed:100 reads:75 writes:25”. Again remember
+that it is safer not implementing the actions inside the signal handler, but delaying the
+action to the main loop. Printing statistics is not a critical task that requires doing it
+immediately before ending processing of current request.
+2. Program the server to rotate the current log level (the level of detail of the messages
+printed to stderr after receiving SIGUSR2.
+The code of all libraries has already been annotated with message printing macros that
+depend on a global variable which controls the details to be printed. See the debug.h
+include at mystore_srv library if you want to know how the macros have been
+programmed.
+Each library has its own function to change the level of the messages. So, if you want to
+change that, call:
+ debuglevel_rotate() to change the debug level of the server.
+ MYC_debuglevel_rotate() to change the debug level of the cache library.
+ STORS_debuglevel_rotate() to change the debug level of the server message
+library.
+Of course, you have to call all three functionsto change debug level of all functions used
+in the server.
+
+7. Redirecting messages to a log file (optional for score>7)
+As a service daemon runs detached from a terminal we are no longer able to read the
+information messages printed to the terminal. To keep them, we need to redirect them to a log
+file (a file with an account of the possible errors or messages of our service) instead than the
+terminal. Fortunately, the C library is already prepared for that. The stdin, stdout and stderr file
+descriptors that we use are just constants that indicate arbitrarily chosen file descriptors. The
+designers of UNIX decided that any program started from a console should inherit from the
+parent shell three descriptors already opened:
+ stdin (file descriptor 0) for reading from terminal.
+ stdout (file descriptor 1) for writing data to terminal.
+ stderr (file descriptor 2) for writing warning and error messages to terminal.
+Then, when we use fprintf(stderr,…); to print any message, we expect that the file descriptor is
+already open and linked to some terminal. However, if we close that descriptor and reopen it
+pointing to a file, we don’t need to rewrite our code. The key function to do that is
+freopen(filename, mode, stream), which reuses an existing file stream, closing the previous
+destination and opening a new one.
+We also should close stdin and stdout to make sure that we don’t try to use them in our server.
+As file descriptors are inherited through fork() we can modify them before initialization code so
+that initial errors are also kept in our log file.
+
+Make sure that you print all messages in your server to stderr and never to stdout! Also, place
+your log file under your own HOME directory. To know your home directory, you can open a
+shell console and get it with the command echo $HOME
+
+You final code should look like this:
+main()
+{
+ signal(SIGHUP, SIG_IGN); // We will ignore SIGHUP as soon as possible
+ // close stdin
+ // close stdout
+ // reopen stderr with “/users/john/store_server.log”
+ initialize daemon libraries.
+ if (some error) exit(1); // Or assign other numbers for other errors
+ pid=fork();
+ if (ischild)
+ { setsid(); processing loop comes here }
+ else exit(0);
+}
+
+A smarter program will call the getenv() syscall to get the user’s directory from the HOME
+environment variable for the current user at run-time:
+char *home=getenv(”HOME”);
+char logfilename[MAX_LOGNAME]; // define enough space for a very long name
+strncpy(logfilename, home, MAX_LOGNAME);
+strncat(logfilename, “store_server.log”, MAX_LOGNAME);
+
+8. Adding command line arguments (optional for score>7)
+At this point we have converted our program in a server daemon which is able to end gracefully,
+to flush the cache periodically, to run from a terminal detaching from it, to continue running in
+background after the terminal has been closed and to send messages to a log file. However,
+sometimes we might need to undo these changes because we have a configuration problem and
+we need to see what the daemon is doing.
+Instead of recompiling our program, a nice approach is to add a start option that avoids
+detaching from the terminal and sending messages to the log file. Many UNIX services provide
+a “-f” (foreground) option which disables forking and detaching.
+Adding also a “-v” option is very practical to increase the logging level of our daemon so that it
+prints more detailed messages. This option can be used more than once.
+In summary, the task here is to add the –f and –v options to your server. You can add other
+additional options if you like. For example, add a –t <n> option to change the flush interval for
+the cache (see the man of getopt() to see how to get options with additional arguments).
+
+8. Adding command line arguments (optional for score>7)
+At this point we have converted our program in a server daemon which is able to end gracefully,
+to flush the cache periodically, to run from a terminal detaching from it, to continue running in
+background after the terminal has been closed and to send messages to a log file. However,
+sometimes we might need to undo these changes because we have a configuration problem and
+we need to see what the daemon is doing.
+Instead of recompiling our program, a nice approach is to add a start option that avoids
+detaching from the terminal and sending messages to the log file. Many UNIX services provide
+a “-f” (foreground) option which disables forking and detaching.
+Adding also a “-v” option is very practical to increase the logging level of our daemon so that it
+prints more detailed messages. This option can be used more than once.
+In summary, the task here is to add the –f and –v options to your server. You can add other
+additional options if you like. For example, add a –t <n> option to change the flush interval for
+the cache (see the man of getopt() to see how to get options with additional arguments).
+
+To help you processing arguments in C programs, the C library provides a very useful function
+called getopt() (see man page for full details and an example of its usage). This library is able to
+search inside argv for a given set of options (arguments formed by one letter with the prefix “-
+“). A simplified example of argument processing searching for two single options follows:
+#define OPTIONS_SET "vf" // We accept only options –v and -f
+#define ADDITIONAL_ARGS 0 // Number of fixed arguments after options
+int main(int argc, char **argv)
+{
+ int error=0; // Set to 1 if you find incorrect options
+ int c; // Next option found
+ int detach = 1; // if –f is not found, default is detach from terminal
+ while (1)
+ {
+ c=getopt(argc,argv,OPTIONS_SET);
+ if (c==EOF) break; // No more options available
+ switch(c)
+ {
+ case 'v':
+ increase verbosity in all libraries once
+ break;
+ case 'f':
+ detach = 0; // If foreground requested, do not detach
+ break;
+ case '?':
+ error=1; // Invalid option found
+ break;
+ }
+ }
+ if ((argc-optind)!=ADDITIONAL_ARGS)error=1; //there should be no more args
+ if (error)
+ {
+ fprintf(stderr,"Usage: %s [-v] [-f]\n",basename(argv[0]));
+ exit(1);
+ }
+ ...continue your code here...
+}
